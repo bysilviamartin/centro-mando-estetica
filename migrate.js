@@ -1,0 +1,1 @@
+const sqlite3 = require('sqlite3').verbose(); let db = new sqlite3.Database('./prisma/dev.db'); db.run('UPDATE Worker SET vacationDays = 22 WHERE vacationDays = 30', function(err) { if (err) { return console.error(err.message); } console.log('Rows updated: ' + this.changes); }); db.close();  

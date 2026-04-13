@@ -1,0 +1,500 @@
+// schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model BusinessSettings {
+  id                               Int     @id @default(1)
+  businessName                     String  @default("Centro de Estética")
+  initialBalance                   Float   @default(0.0)
+  fiscalQuarterStartMonth          Int     @default(1) // 1 = January
+  workingDaysPerWeek               Int     @default(5)
+  defaultCurrency                  String  @default("EUR")
+  alertThresholdLowBalance         Float   @default(1000.0)
+  alertThresholdHighExpensePct     Float   @default(20.0) // 20% increase triggers alert
+}
+
+model Account {
+  id                   String             @id @default(cuid())
+  name                 String
+  type                 String             // "cash", "bank", "reserve"
+  initialBalance       Float              @default(0.0)
+  active               Boolean            @default(true)
+  sourceMovements      TreasuryMovement[] @relation("SourceAccount")
+  destinationMovements TreasuryMovement[] @relation("DestinationAccount")
+  expenses             Expense[]          @relation("ExpenseAccount")
+  payrolls             PayrollEntry[]     @relation("PayrollAccount")
+  taxes                TaxEntry[]         @relation("TaxAccount")
+  installments         PaymentInstallment[] // Relación hacia la nueva estructura de pagos
+}
+
+model ImportedMovement {
+  id                     String         @id @default(cuid())
+  importSessionId        String
+  importSession          ImportSession  @relation(fields: [importSessionId], references: [id], onDelete: Cascade)
+  date                   DateTime
+  type                   String         // "ingreso", "gasto"
+  description            String
+  amount                 Float
+  saleAmount             Float
+  saleTax                Float
+  paymentMethod          String
+  employeeName           String?
+
+  // Raw Extraction (Phase 2.3 Koibox Structural Parsing)
+  rawClientName          String?
+  rawServiceSegment      String?
+  rawProductSegments     String? // JSON string array
+  rawUnparsedRemainder   String?
+
+  // Operational Classification
+  classifiedType         String         // "service", "product", "voucher", "gift_card", "unknown"
+  classifiedEntityId     String?        // ID of the catalog item
+  classificationStatus   String         // "classified", "pending_review", "ignored"
+
+  // Fiscal Treatment
+  fiscalRuleType         String         // "normal_taxable_sale", "prepaid_voucher_sale", "voucher_session_consumption", "debt_payment", "gift_card_sale", "gift_card_redemption", "non_taxable_adjustment", "unknown"
+  countsAsRevenue        Boolean        @default(false)
+  generatesVat           Boolean        @default(false)
+  vatAlreadyRecognized   Boolean        @default(false)
+
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+}
+
+// Phase 2.4: Dual Import (Ventas)
+model ImportedSale {
+  @@map("ImportedSale")
+  id                     String         @id @default(cuid())
+  importSessionId        String
+  importSession          ImportSession  @relation(fields: [importSessionId], references: [id], onDelete: Cascade)
+  ticketNumber           String
+  date                   DateTime
+  description            String
+  quantity               Float          @default(1.0)
+  baseAmount             Float          @default(0.0)
+  taxAmount              Float          @default(0.0)
+  totalAmount            Float          @default(0.0)
+  employeeName           String?
+  category               String?        // Familia de servicio/producto importada
+  reference              String?        // Referencia original para cruce exacto con servicios
+  
+  // Operational Classification
+  classifiedType         String         // "service", "product", "voucher", "gift_card", "unknown"
+  classifiedEntityId     String?
+  classificationStatus   String         // "classified", "pending_review", "ignored"
+
+  // Fiscal Treatment
+  fiscalRuleType         String         // "normal_taxable_sale", "prepaid_voucher_sale", "voucher_session_consumption", "debt_payment", "gift_card_sale", "gift_card_redemption", "non_taxable_adjustment", "unknown"
+  countsAsRevenue        Boolean        @default(false)
+  generatesVat           Boolean        @default(false)
+  vatAlreadyRecognized   Boolean        @default(false)
+
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+}
+
+model DailyCashSummary {
+  id              String        @id @default(cuid())
+  importSessionId String
+  importSession   ImportSession @relation(fields: [importSessionId], references: [id], onDelete: Cascade)
+  date            DateTime
+  expectedAmount  Float
+  actualAmount    Float
+  difference      Float
+  createdAt       DateTime      @default(now())
+}
+
+model Service {
+  id               String   @id @default(cuid())
+  
+  // Campos estructurados de Koibox
+  reference        String?
+  name             String   @unique
+  price            Float    @default(0.0)
+  duration         Int?
+  category         String?
+  taxRate          Float?
+  active           Boolean  @default(true)
+  details          String?
+  showOnline       Boolean  @default(false)
+  employees        String?  // JSON o string separado por comas
+  tariffs          String?  // JSON o string
+  
+  productCost      Float    @default(0.0)
+  disposableCost   Float    @default(0.0)
+  equipmentCost    Float    @default(0.0)
+  
+  equipments       Equipment[] // Relación M2M implícita
+  
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model Product {
+  id           String   @id @default(cuid())
+  reference    String?  @unique
+  name         String   @unique
+  line         String?  // Línea/gama comercial
+  capacity     String?  // Ej. "50ml", "100g"
+  costPrice    Float    @default(0.0) // Precio compra
+  vat          Float    @default(21.0) // IVA (%)
+  salePrice    Float    @default(0.0) // Precio venta
+  
+  stock        Int      @default(0)
+  minimumStock Int      @default(0)
+  supplier     String?
+  minimumOrder Int      @default(1)
+  internalUse  Boolean  @default(false)
+  
+  active       Boolean  @default(true)
+  
+  stockMovements ProductStockMovement[]
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model ProductStockMovement {
+  id          String   @id @default(cuid())
+  productId   String
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  type        String   // Ej: "import_initial", "sale", "manual_adjustment", "restock_import"
+  quantity    Int      // Positivo (suma) o Negativo (resta)
+  date        DateTime @default(now())
+  description String?
+}
+
+model Voucher {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  type      String   // "bono", "tarjeta_regalo"
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+
+
+model Employee {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  payrolls  PayrollEntry[]
+}
+
+// ==========================================
+// PAYMENT AND INSTALLMENTS CORE
+// ==========================================
+
+model PaymentInstallment {
+  id                String    @id @default(cuid())
+  
+  // Enlaces opcionales a la Obligación origen
+  expenseId         String? 
+  expense           Expense?  @relation(fields: [expenseId], references: [id])
+  taxEntryId        String?
+  taxEntry          TaxEntry? @relation(fields: [taxEntryId], references: [id])
+  payrollEntryId    String?
+  payrollEntry      PayrollEntry? @relation(fields: [payrollEntryId], references: [id])
+  
+  // Datos del Plazo
+  amount            Float     
+  expectedDate      DateTime  
+  paymentMethod     String?   
+  
+  // Ejecución
+  status            String    @default("pending") // "pending", "paid", "cancelled"
+  paidDate          DateTime? 
+  
+  // Enlace a Tesorería
+  treasuryAccountId String?
+  treasuryAccount   Account?  @relation(fields: [treasuryAccountId], references: [id])
+  
+  // Movimiento definitivo en Banco/Caja (1 a 1)
+  treasuryMovementId String?  @unique
+  treasuryMovement   TreasuryMovement? @relation(fields: [treasuryMovementId], references: [id])
+
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+// ==========================================
+
+model ExpenseCategory {
+  id        String    @id @default(cuid())
+  name      String    @unique // e.g. "payroll", "product_suppliers", "disposables", "general_expenses", etc.
+  label     String
+  expenses  Expense[]
+}
+
+model Supplier {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  contactInfo String?
+  expenses    Expense[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Expense {
+  id                String          @id @default(cuid())
+  expenseCategoryId String
+  expenseCategory   ExpenseCategory @relation(fields: [expenseCategoryId], references: [id])
+  description       String
+  baseAmount        Float
+  taxAmount         Float
+  totalAmount       Float
+  taxDeductible     Boolean         @default(false)
+  
+  // Nuevos campos de Control (Fase 3: Obligation vs Payment)
+  invoiceDate       DateTime?
+  installments      PaymentInstallment[]
+  
+  // ---- CAMPOS LEGACY PARA CONVIVENCIA CON HISTÓRICO (Fase 3 Transicional) ----
+  dueDate           DateTime?
+  paidDate          DateTime?
+  paymentStatus     String          // "pending", "paid"
+  // -------------------------------------------------------------------------
+  
+  supplierId        String?
+  supplier          Supplier?       @relation(fields: [supplierId], references: [id])
+  treasuryAccountId String?
+  treasuryAccount   Account?        @relation("ExpenseAccount", fields: [treasuryAccountId], references: [id])
+  documents         Document[]
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+}
+
+model TreasuryMovement {
+  id                   String   @id @default(cuid())
+  date                 DateTime
+  description          String
+  amount               Float
+  type                 String   // "inflow" (external in), "outflow" (external out), "internal_transfer" (between accounts)
+  isAdjustment         Boolean  @default(false)
+  
+  // Internal Account Links (used for internal transfers or the internal side of an external flow)
+  sourceAccountId      String?
+  sourceAccount        Account?  @relation("SourceAccount", fields: [sourceAccountId], references: [id])
+  destinationAccountId String?
+  destinationAccount   Account?  @relation("DestinationAccount", fields: [destinationAccountId], references: [id])
+  
+  // External Entities (for inflows/outflows)
+  externalEntity       String?   // e.g. "Ayuntamiento (Volveremos)", "Supplier Name", "Hacienda"
+  
+  // Relación Inversa al Módulo de Pagos
+  paymentInstallment   PaymentInstallment?
+  
+  documents            Document[]
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+}
+
+model PayrollEntry {
+  id         String    @id @default(cuid())
+  date       DateTime
+  employeeId String
+  employee   Employee  @relation(fields: [employeeId], references: [id])
+  amount     Float
+  type       String    @default("base_salary")
+  note       String?
+  
+  installments PaymentInstallment[] // Soporte para pagos fraccionados de nómina
+  
+  // ---- Campos Legacy Fase 2 ----
+  paidDate   DateTime?
+  status     String    // "pending", "paid"
+  treasuryAccountId String?
+  // ------------------------------
+  
+  treasuryAccount   Account?  @relation("PayrollAccount", fields: [treasuryAccountId], references: [id])
+  documents  Document[]
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
+
+model TaxEntry {
+  id          String   @id @default(cuid())
+  date        DateTime
+  description String
+  amount      Float
+  type        String   // "payment", "reserve"
+  
+  installments PaymentInstallment[]
+  
+  // ---- Campos Legacy Fase 2 ----
+  treasuryAccountId String?
+  // ------------------------------
+  
+  treasuryAccount   Account?  @relation("TaxAccount", fields: [treasuryAccountId], references: [id])
+  documents   Document[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ClassificationRule {
+  id                 String   @id @default(cuid())
+  keyword            String   @unique
+  targetType         String   // "service", "product", "voucher", "gift_card"
+  targetId           String?  // Reference ID (if applicable)
+  targetFiscalRule   String   // enum of fiscal rules
+  targetField        String   @default("full_description") // "full_description", "client_name", "service_segment", "product_segment"
+  active             Boolean  @default(true) // For ignoring/disabling bad rules
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model ImportSession {
+  id               String               @id @default(cuid())
+  uploadDate       DateTime             @default(now())
+  filename         String
+  fileType         String               @default("movimientos") // "ventas" or "movimientos"
+  status           String               // "success", "partial", "failed"
+  rowsProcessed    Int                  @default(0)
+  rowsIgnored      Int                  @default(0)
+  movements        ImportedMovement[]
+  sales            ImportedSale[]
+  summaries        DailyCashSummary[]
+}
+
+model Alert {
+  id        String   @id @default(cuid())
+  date      DateTime @default(now())
+  type      String   // "upcoming_payment", "high_expense", "low_balance", "tax_warning", "unclassified_rows"
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model Document {
+  id                 String   @id @default(cuid())
+  name               String
+  url                String
+  expenseId          String?
+  expense            Expense? @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  payrollEntryId     String?
+  payrollEntry       PayrollEntry? @relation(fields: [payrollEntryId], references: [id], onDelete: Cascade)
+  taxEntryId         String?
+  taxEntry           TaxEntry? @relation(fields: [taxEntryId], references: [id], onDelete: Cascade)
+  treasuryMovementId String?
+  treasuryMovement   TreasuryMovement? @relation(fields: [treasuryMovementId], references: [id], onDelete: Cascade)
+  createdAt          DateTime @default(now())
+}
+
+// ==========================================
+// DAILY CASH (CAJA DIARIA DEL CENTRO)
+// ==========================================
+
+model DailyCash {
+  id                    String   @id @default(cuid())
+  date                  DateTime @unique
+
+  treatmentSales        Decimal  @default(0)
+  productSales          Decimal  @default(0)
+  voucherSales          Decimal  @default(0)
+  giftCardSales         Decimal  @default(0)
+  otherSales            Decimal  @default(0)
+
+  cashAmount            Decimal  @default(0)
+  cardAmount            Decimal  @default(0)
+  transferAmount        Decimal  @default(0)
+  bizumAmount           Decimal  @default(0)
+  volveremosCashAmount  Decimal  @default(0)
+  volveremosCardAmount  Decimal  @default(0)
+
+  notes                 String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+// ==========================================
+// CALENDAR (EVENTOS DEL CENTRO)
+// ==========================================
+
+model CalendarEvent {
+  id         String   @id @default(cuid())
+  type       String   // "FESTIVO_CERRADO", "PUENTE_CERRADO", "VACACIONES_CENTRO", "CIERRE_EXTRAORDINARIO", "APERTURA_EXTRAORDINARIA", "EVENTO_INTERNO"
+  title      String
+  startDate  DateTime
+  endDate    DateTime
+  recurrence String   @default("NONE") // "NONE", "YEARLY"
+  status     String   @default("ACTIVE") // "ACTIVE", "INACTIVE"
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// ==========================================
+// WORKERS (TRABAJADORAS)
+// ==========================================
+
+model Worker {
+  id                  String   @id @default(cuid())
+  firstName           String
+  lastName            String
+  birthDate           String?
+  phone               String?
+  email               String?
+  hireDate            String?
+  contractType        String   @default("Indefinido")
+  servicesPlaceholder String?
+  vacationDays        Int      @default(22) // Días asignados por defecto
+  status              String   @default("Activa") // "Activa", "Inactiva"
+  
+  // Costes y Rentabilidad
+  monthlyCost         Float?   @default(0.0)
+  weeklyHours         Float?   @default(40.0)
+  targetMinimum       Float?   @default(0.0)
+  targetHealthy       Float?   @default(0.0)
+  
+  vacations           WorkerVacation[]
+  absences            WorkerAbsence[]
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model WorkerVacation {
+  id          String   @id @default(cuid())
+  workerId    String
+  worker      Worker   @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  startDate   DateTime
+  endDate     DateTime
+  status      String   @default("Aprobada") // "Aprobada", "Disfrutada", "Cancelada"
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model WorkerAbsence {
+  id          String   @id @default(cuid())
+  workerId    String
+  worker      Worker   @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  type        String   // "Baja laboral", "Permiso", "Ausencia puntual"
+  startDate   DateTime
+  endDate     DateTime
+  status      String   @default("Activa") // "Activa", "Cerrada"
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Equipment {
+  id              String      @id @default(cuid())
+  name            String
+  purchaseDate    DateTime?
+  purchasePrice   Float?
+  active          Boolean     @default(true)
+  notes           String?
+  services        Service[]   // M2M Relación implícita con servicios
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}

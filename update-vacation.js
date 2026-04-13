@@ -1,0 +1,1 @@
+const { PrismaClient } = require('@prisma/client'); const prisma = new PrismaClient(); async function main() { const count = await prisma.worker.updateMany({ where: { vacationDays: 30 }, data: { vacationDays: 22 } }); console.log(Updated  records); } main();  
