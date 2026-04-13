@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Activity, Package, DollarSign, Percent, History, Save, Tag, Hash, FileText, Truck, Calendar } from "lucide-react";
+import { Activity, Package, DollarSign, Percent, History, Save, Tag, Hash, FileText, Truck, Calendar, Sparkles } from "lucide-react";
 import { updateCabinaProduct, adjustCabinaStock } from "@/actions/cabina-products";
 
 export default function CabinaProductDetailsClient({ initialProduct }: { initialProduct: any }) {
