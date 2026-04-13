@@ -181,7 +181,7 @@ export default function CabinaProductDetailsClient({ initialProduct }: { initial
                 <input 
                   type="number" 
                   value={stockAdjustment}
-                  onChange={(e) => setStockAdjustment(e.target.value)}
+                 onChange={(e) => setStockAdjustment(e.target.value === "" ? "" : Number(e.target.value))}
                   placeholder="Cantidad (+/-)"
                   style={{ 
                     flex: 1, padding: "0.6rem 1rem", borderRadius: "var(--radius-md)", 
