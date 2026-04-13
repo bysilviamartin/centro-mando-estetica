@@ -21,8 +21,10 @@ type CierreRow = {
 
 function getWorkbook() {
   const filePath = path.resolve(
-    "C:/Users/Juan/OneDrive/Documentos/PROYECTO NUEVO.xlsx"
-  );
+  process.cwd(),
+  "data",
+  "PROYECTO NUEVO.xlsx"
+);
 
   const fileBuffer = fs.readFileSync(filePath);
   return XLSX.read(fileBuffer, { type: "buffer" });
